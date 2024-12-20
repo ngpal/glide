@@ -15,6 +15,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             loop {
                 match socket.read(&mut buffer).await {
+                    Ok(0) => {
+                        println!("Client has closed the connection.");
+                        break;
+                    }
                     Ok(bytes_read) => println!(
                         "Recieved: {}",
                         String::from_utf8_lossy(&buffer[..bytes_read])
