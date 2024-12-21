@@ -1,4 +1,5 @@
-use std::io;
+use std::io::Write;
+use std::{fs, io};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
@@ -8,20 +9,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Connected to server");
 
     loop {
-        let mut message = String::new();
-        println!("Enter a message to send (or type 'exit' to quit):");
+        let mut file_name = String::new();
 
-        io::stdin().read_line(&mut message)?;
+        print!("Enter the file name to send (or type 'exit' to quit): ");
+        io::stdout().flush().unwrap();
 
-        let message = message.trim();
+        io::stdin().read_line(&mut file_name)?;
 
-        if message.to_lowercase() == "exit" {
+        let file_name = file_name.trim();
+        if file_name.to_lowercase() == "exit" {
             println!("Exiting...");
             break;
         }
 
-        stream.write_all(message.as_bytes()).await?;
-        println!("Message sent!");
+        match fs::metadata(&file_name) {
+            Ok(metadata) => {
+                stream
+                    .write_all(format!("{}:{}", &file_name, metadata.len()).as_bytes())
+                    .await?;
+                println!("Message sent!");
+            }
+            Err(e) => {
+                println!("There has been an error in locating the file:\n{}", e);
+            }
+        }
     }
 
     Ok(())
