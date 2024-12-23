@@ -1,7 +1,12 @@
 [package]
-name = "file-transfer"
+name = "glide"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+members = [
+  "glide-client",
+  "glide-server"
+]
+
 [dependencies]
-tokio = { version = "1.42.0", features = ["full"] }
