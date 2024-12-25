@@ -21,12 +21,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let username = username.trim();
 
-        if validate_username(&username) {
-            break;
-        }
-
-        println!(
-            "Invalid username!
+        if !validate_username(username) {
+            println!(
+                "Invalid username!
 Usernames must follow these rules:
     • Only alphanumeric characters and periods (.) are allowed.
     • Must be 1 to 10 characters long.
@@ -34,12 +31,32 @@ Usernames must follow these rules:
     • Cannot contain consecutive periods (..).
 
 Please try again with a valid username."
-        )
-    }
+            );
+            continue;
+        }
 
-    stream
-        .write_all(format!("username {}\n", username).as_bytes())
-        .await?;
+        // Send the username to the server
+        stream.write_all(username.as_bytes()).await?;
+
+        // Wait for the server's response
+        let mut response = vec![0; CHUNK_SIZE];
+        let bytes_read = stream.read(&mut response).await?;
+        if bytes_read == 0 {
+            println!("Server disconnected unexpectedly.");
+            return Err("Connection closed by the server".into());
+        }
+
+        let response_str = String::from_utf8_lossy(&response[..bytes_read])
+            .trim()
+            .to_string();
+
+        if response_str == "OK" {
+            println!("You are now connected as @{}", username);
+            break;
+        } else {
+            println!("Server rejected username: {}", response_str);
+        }
+    }
 
     // Command loop
     let stdin = io::stdin();
@@ -62,9 +79,7 @@ Please try again with a valid username."
         }
 
         // Send command to the server
-        stream
-            .write_all(format!("{}\n", command).as_bytes())
-            .await?;
+        stream.write_all(command.as_bytes()).await?;
 
         // Await server response
         let mut response = vec![0; CHUNK_SIZE];
