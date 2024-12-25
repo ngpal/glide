@@ -121,7 +121,6 @@ async fn handle_client(
     loop {
         let bytes_read = socket.read(&mut buffer).await?;
         if bytes_read == 0 {
-            println!("Client @{} disconnected", username);
             remove_client(&username, &state).await;
             break;
         }
