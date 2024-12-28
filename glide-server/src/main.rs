@@ -65,7 +65,19 @@ impl Command {
 }
 
 // Shared state to hold usernames of connected clients
-type SharedState = Arc<Mutex<HashMap<String, String>>>;
+#[derive(Clone)]
+struct Request {
+    from_username: String,
+    filename: String,
+    size: u64,
+}
+
+struct UserData {
+    socket: String,
+    incoming_requests: Vec<Request>,
+}
+
+type SharedState = Arc<Mutex<HashMap<String, UserData>>>;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -159,13 +171,13 @@ async fn handle_client(
 
         // Check if the username is valid and available
         let response = {
-            let mut clients = state.lock().await;
+            let clients = state.lock().await;
             if !validate_username(&username) {
                 "INVALID_USERNAME"
             } else if clients.contains_key(&username) {
                 "USERNAME_TAKEN"
             } else {
-                clients.insert(username.clone(), socket.peer_addr()?.to_string());
+                add_client(&username, socket, &state).await?;
                 "OK"
             }
         };
@@ -200,9 +212,45 @@ async fn handle_client(
     Ok(())
 }
 
+async fn add_client(
+    username: &str,
+    socket: &mut TcpStream,
+    state: &SharedState,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut clients = state.lock().await;
+    clients.insert(
+        username.to_string(),
+        UserData {
+            socket: socket.peer_addr()?.to_string(),
+            incoming_requests: vec![],
+        },
+    );
+    Ok(())
+}
+
 async fn remove_client(username: &str, state: &SharedState) {
     let mut clients = state.lock().await;
+
+    // Remove the client
     clients.remove(username);
+
+    // Collect requests to be removed
+    let mut to_remove = Vec::new();
+    for (user, client) in clients.iter() {
+        for (i, req) in client.incoming_requests.iter().enumerate() {
+            if req.from_username == username {
+                to_remove.push((user.clone(), i));
+            }
+        }
+    }
+
+    // Remove the collected requests
+    for (user, index) in to_remove {
+        if let Some(client) = clients.get_mut(&user) {
+            client.incoming_requests.remove(index);
+        }
+    }
+
     println!("Client @{} disconnected", username);
 }
 
