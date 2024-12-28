@@ -1,5 +1,8 @@
 use regex::Regex;
 use std::collections::HashMap;
+use std::fs;
+use std::os::unix::fs::MetadataExt;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -65,13 +68,14 @@ impl Command {
 }
 
 // Shared state to hold usernames of connected clients
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Request {
     from_username: String,
     filename: String,
     size: u64,
 }
 
+#[derive(Debug)]
 struct UserData {
     socket: String,
     incoming_requests: Vec<Request>,
@@ -102,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn handle_command(
     command: &str,
-    _username: &str,
+    username: &str,
     socket: &mut TcpStream,
     state: &SharedState,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -126,7 +130,11 @@ async fn handle_command(
             socket.write_all(response.as_bytes()).await?;
         }
         Command::Requests => todo!(),
-        Command::Glide { path, to } => todo!(),
+        Command::Glide { path, to } => {
+            socket
+                .write_all(cmd_glide(state, username, &path, &to).await.as_bytes())
+                .await?
+        }
         Command::Ok(user) => todo!(),
         Command::No(user) => todo!(),
         Command::Help(_) => {
@@ -146,6 +154,34 @@ async fn handle_command(
     }
 
     Ok(())
+}
+
+async fn cmd_glide(state: &SharedState, from: &str, path: &str, to: &str) -> String {
+    // Check if file exists
+    if !Path::new(path).exists() && fs::metadata(&path).unwrap().is_file() {
+        return format!("Path '{}' is invalid. File does not exist", path);
+    }
+
+    // Check if user exists
+    let mut clients = state.lock().await;
+    if !clients.contains_key(to) {
+        return format!("User @{} does not exist", to);
+    }
+
+    let file_size = fs::metadata(&path).unwrap().size();
+
+    // Add request
+    clients
+        .get_mut(to)
+        .unwrap()
+        .incoming_requests
+        .push(Request {
+            from_username: from.to_string(),
+            filename: path.to_string(),
+            size: file_size,
+        });
+
+    format!("Successfully sent share request to @{} for {}", to, path)
 }
 
 async fn handle_client(
@@ -177,6 +213,7 @@ async fn handle_client(
             } else if clients.contains_key(&username) {
                 "USERNAME_TAKEN"
             } else {
+                drop(clients);
                 add_client(&username, socket, &state).await?;
                 "OK"
             }
