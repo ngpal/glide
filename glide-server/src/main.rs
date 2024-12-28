@@ -113,23 +113,13 @@ async fn handle_command(
     let command = Command::parse(command);
     match command {
         Command::List => {
-            // Fetch the list of all connected usernames
-            let clients = state.lock().await;
-            let user_list: Vec<String> = clients
-                .keys()
-                .cloned()
-                .map(|x| format!(" @{}", x))
-                .collect();
-
-            let response = if user_list.is_empty() {
-                "No users are currently connected.".to_string()
-            } else {
-                format!("Connected users:\n{}", user_list.join("\n"))
-            };
-
-            socket.write_all(response.as_bytes()).await?;
+            socket.write_all(cmd_list(state).await.as_bytes()).await?;
         }
-        Command::Requests => todo!(),
+        Command::Requests => {
+            socket
+                .write_all(cmd_reqs(state, username).await.as_bytes())
+                .await?;
+        }
         Command::Glide { path, to } => {
             socket
                 .write_all(cmd_glide(state, username, &path, &to).await.as_bytes())
@@ -154,6 +144,43 @@ async fn handle_command(
     }
 
     Ok(())
+}
+
+async fn cmd_list(state: &SharedState) -> String {
+    let clients = state.lock().await;
+    let user_list: Vec<String> = clients
+        .keys()
+        .cloned()
+        .map(|x| format!(" @{}", x))
+        .collect();
+
+    if user_list.is_empty() {
+        "No users are currently connected.".to_string()
+    } else {
+        format!("Connected users:\n{}", user_list.join("\n"))
+    }
+}
+
+async fn cmd_reqs(state: &SharedState, username: &str) -> String {
+    let clients = state.lock().await;
+    let incoming_user_list: Vec<String> = clients
+        .get(username)
+        .unwrap()
+        .incoming_requests
+        .iter()
+        .map(|x| {
+            format!(
+                " @{}, file: {}, size: {} bytes",
+                x.from_username, x.filename, x.size,
+            )
+        })
+        .collect();
+
+    if incoming_user_list.is_empty() {
+        "No incoming requests".to_string()
+    } else {
+        format!("Incoming requests:\n{}", incoming_user_list.join("\n"))
+    }
 }
 
 async fn cmd_glide(state: &SharedState, from: &str, path: &str, to: &str) -> String {
