@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
@@ -9,6 +11,22 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 
 const CHUNK_SIZE: usize = 1024;
+
+#[derive(Clone, Debug)]
+struct Request {
+    from_username: String,
+    filename: String,
+    size: u64,
+}
+
+#[derive(Debug)]
+struct UserData {
+    socket: String,
+    incoming_requests: Vec<Request>,
+}
+
+// Shared state to hold usernames and requests of connected clients
+type SharedState = Arc<Mutex<HashMap<String, UserData>>>;
 
 enum Command {
     List,
@@ -49,7 +67,6 @@ impl Command {
         }
     }
 
-    #[allow(unused)]
     fn get_str(&self) -> Result<String, String> {
         Ok(match self {
             Command::List => "list".to_string(),
@@ -65,23 +82,126 @@ impl Command {
             Command::InvalidCommand(s) => return Err(s.to_string()),
         })
     }
-}
 
-// Shared state to hold usernames of connected clients
-#[derive(Clone, Debug)]
-struct Request {
-    from_username: String,
-    filename: String,
-    size: u64,
-}
+    pub async fn execute(&self, state: &SharedState, username: &str) -> String {
+        match self {
+            Command::List => self.cmd_list(state, username).await,
+            Command::Requests => self.cmd_reqs(state, username).await,
+            Command::Glide { path: _, to: _ } => self.cmd_glide(state, username).await,
+            Command::Ok(_) => self.cmd_ok(state, username).await,
+            Command::No(_) => self.cmd_no(state, username).await,
+            Command::Help(_) => self.cmd_help(state, username).await,
+            Command::InvalidCommand(cmd) => {
+                format!(
+                    "Unknown command: {}\nType 'help' for available commands.",
+                    cmd,
+                )
+            }
+        }
+    }
 
-#[derive(Debug)]
-struct UserData {
-    socket: String,
-    incoming_requests: Vec<Request>,
-}
+    // Executes and prints the output of a command to a user
+    async fn handle(
+        command: &str,
+        username: &str,
+        socket: &mut TcpStream,
+        state: &SharedState,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let response = Command::parse(command).execute(state, username).await;
+        socket.write_all(response.as_bytes()).await?;
 
-type SharedState = Arc<Mutex<HashMap<String, UserData>>>;
+        Ok(())
+    }
+
+    // -- Command implementations --
+
+    async fn cmd_list(&self, state: &SharedState, username: &str) -> String {
+        let clients = state.lock().await;
+        let user_list: Vec<String> = clients
+            .keys()
+            .cloned()
+            .filter(|x| x != username)
+            .map(|x| format!(" @{}", x))
+            .collect();
+
+        if user_list.is_empty() {
+            "No other users are currently connected.".to_string()
+        } else {
+            format!("Connected users:\n{}", user_list.join("\n"))
+        }
+    }
+
+    async fn cmd_reqs(&self, state: &SharedState, username: &str) -> String {
+        let clients = state.lock().await;
+        let incoming_user_list: Vec<String> = clients
+            .get(username)
+            .unwrap()
+            .incoming_requests
+            .iter()
+            .map(|x| {
+                format!(
+                    " @{}, file: {}, size: {} bytes",
+                    x.from_username, x.filename, x.size,
+                )
+            })
+            .collect();
+
+        if incoming_user_list.is_empty() {
+            "No incoming requests".to_string()
+        } else {
+            format!("Incoming requests:\n{}", incoming_user_list.join("\n"))
+        }
+    }
+
+    async fn cmd_glide(&self, state: &SharedState, username: &str) -> String {
+        let (path, to) = match self {
+            Command::Glide { path, to } => (path, to),
+            _ => unreachable!(),
+        };
+
+        // Check if file exists
+        if !Path::new(path).exists() && fs::metadata(&path).unwrap().is_file() {
+            return format!("Path '{}' is invalid. File does not exist", path);
+        }
+
+        // Check if user exists
+        let mut clients = state.lock().await;
+        if !clients.contains_key(to) && username != to {
+            return format!("User @{} does not exist", to);
+        }
+
+        let file_size = fs::metadata(&path).unwrap().size();
+
+        // Add request
+        clients
+            .get_mut(to)
+            .unwrap()
+            .incoming_requests
+            .push(Request {
+                from_username: username.to_string(),
+                filename: path.to_string(),
+                size: file_size,
+            });
+
+        format!("Successfully sent share request to @{} for {}", to, path)
+    }
+
+    async fn cmd_ok(&self, state: &SharedState, username: &str) -> String {
+        todo!()
+    }
+
+    async fn cmd_no(&self, state: &SharedState, username: &str) -> String {
+        todo!()
+    }
+
+    async fn cmd_help(&self, state: &SharedState, username: &str) -> String {
+        "Available commands:\n\
+          list - Show all connected users.\n\
+          help - Show this help message.\n\
+          exit - Disconnect from the server."
+            .to_string()
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -102,113 +222,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
-}
-
-async fn handle_command(
-    command: &str,
-    username: &str,
-    socket: &mut TcpStream,
-    state: &SharedState,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let command = Command::parse(command);
-    match command {
-        Command::List => {
-            socket.write_all(cmd_list(state).await.as_bytes()).await?;
-        }
-        Command::Requests => {
-            socket
-                .write_all(cmd_reqs(state, username).await.as_bytes())
-                .await?;
-        }
-        Command::Glide { path, to } => {
-            socket
-                .write_all(cmd_glide(state, username, &path, &to).await.as_bytes())
-                .await?
-        }
-        Command::Ok(user) => todo!(),
-        Command::No(user) => todo!(),
-        Command::Help(_) => {
-            let response = "Available commands:\n\
-                              list - Show all connected users.\n\
-                              help - Show this help message.\n\
-                              exit - Disconnect from the server.";
-            socket.write_all(response.as_bytes()).await?;
-        }
-        Command::InvalidCommand(cmd) => {
-            let response = format!(
-                "Unknown command: {}\nType 'help' for available commands.",
-                cmd,
-            );
-            socket.write_all(response.as_bytes()).await?;
-        }
-    }
-
-    Ok(())
-}
-
-async fn cmd_list(state: &SharedState) -> String {
-    let clients = state.lock().await;
-    let user_list: Vec<String> = clients
-        .keys()
-        .cloned()
-        .map(|x| format!(" @{}", x))
-        .collect();
-
-    if user_list.is_empty() {
-        "No users are currently connected.".to_string()
-    } else {
-        format!("Connected users:\n{}", user_list.join("\n"))
-    }
-}
-
-async fn cmd_reqs(state: &SharedState, username: &str) -> String {
-    let clients = state.lock().await;
-    let incoming_user_list: Vec<String> = clients
-        .get(username)
-        .unwrap()
-        .incoming_requests
-        .iter()
-        .map(|x| {
-            format!(
-                " @{}, file: {}, size: {} bytes",
-                x.from_username, x.filename, x.size,
-            )
-        })
-        .collect();
-
-    if incoming_user_list.is_empty() {
-        "No incoming requests".to_string()
-    } else {
-        format!("Incoming requests:\n{}", incoming_user_list.join("\n"))
-    }
-}
-
-async fn cmd_glide(state: &SharedState, from: &str, path: &str, to: &str) -> String {
-    // Check if file exists
-    if !Path::new(path).exists() && fs::metadata(&path).unwrap().is_file() {
-        return format!("Path '{}' is invalid. File does not exist", path);
-    }
-
-    // Check if user exists
-    let mut clients = state.lock().await;
-    if !clients.contains_key(to) {
-        return format!("User @{} does not exist", to);
-    }
-
-    let file_size = fs::metadata(&path).unwrap().size();
-
-    // Add request
-    clients
-        .get_mut(to)
-        .unwrap()
-        .incoming_requests
-        .push(Request {
-            from_username: from.to_string(),
-            filename: path.to_string(),
-            size: file_size,
-        });
-
-    format!("Successfully sent share request to @{} for {}", to, path)
 }
 
 async fn handle_client(
@@ -267,7 +280,7 @@ async fn handle_client(
             .trim()
             .to_string();
 
-        if let Err(e) = handle_command(&command, &username, socket, &state).await {
+        if let Err(e) = Command::handle(&command, &username, socket, &state).await {
             println!("Error handling command for @{}: {}", username, e);
             break;
         }
