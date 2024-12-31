@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+use get_if_addrs::{get_if_addrs, IfAddr};
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
@@ -205,9 +206,27 @@ impl Command {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let listener = TcpListener::bind("127.0.0.1:8080").await?;
-    println!("Server is running on 127.0.0.1:8080");
+    let mut network_ip = "127.0.0.1".to_string(); // Default to localhost
 
+    for iface in get_if_addrs()? {
+        match iface.addr {
+            IfAddr::V4(v4_addr) => {
+                // Use the first non-loopback IPv4 address as the network IP
+                if !v4_addr.ip.is_loopback() && network_ip == "127.0.0.1" {
+                    network_ip = v4_addr.ip.to_string();
+                }
+            }
+            _ => (),
+        }
+    }
+
+    // Display the message with the dynamically detected IP
+    println!("To connect to this server, use the following address:");
+    println!("  Local clients: http://127.0.0.1:8000");
+    println!("  Network clients: http://{}:8000", network_ip);
+
+    let listener = TcpListener::bind("0.0.0.0:8000").await?;
+    println!("Server is running on 0.0.0.0:8000 (listening on all interfaces)");
     let state: SharedState = Arc::new(Mutex::new(HashMap::new()));
 
     loop {

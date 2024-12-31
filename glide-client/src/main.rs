@@ -1,4 +1,5 @@
 use regex::Regex;
+use std::env;
 use std::io::Write;
 use std::io::{self, BufRead};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -8,8 +9,23 @@ const CHUNK_SIZE: usize = 1024;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut stream = TcpStream::connect("127.0.0.1:8080").await?;
-    println!("Connected to server!");
+    // Retrieve command-line arguments
+    let args: Vec<String> = env::args().collect();
+
+    // Check if the required arguments are provided
+    if args.len() != 3 {
+        eprintln!("Usage: {} <IP> <PORT>", args[0]);
+        std::process::exit(1);
+    }
+
+    // Parse the IP and port from arguments
+    let ip = &args[1];
+    let port = &args[2];
+    let address = format!("{}:{}", ip, port);
+
+    // Connect to the server
+    let mut stream = TcpStream::connect(&address).await?;
+    println!("Connected to server at {}!", address);
 
     let mut username = String::new();
 
