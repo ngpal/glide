@@ -11,23 +11,25 @@ pub struct UserData {
 }
 
 #[derive(Debug)]
-pub enum ServerSignal {
+pub enum ServerResponse {
     UsernameInvalid,
     UsernameTaken,
     UsernameOk,
     UnknownCommand,
+    UnknownUser,
     ConnectedUsers(Vec<String>),
     IncomingRequests(Vec<Request>),
     GlideRequestSent,
 }
 
-impl ServerSignal {
-    pub fn from(string: &str) -> Result<ServerSignal, String> {
+impl ServerResponse {
+    pub fn from(string: &str) -> Result<ServerResponse, String> {
         let signal = match string {
             "INVALID_USERNAME" => Self::UsernameInvalid,
             "USERNAME_TAKEN" => Self::UsernameTaken,
             "USERNAME_OK" => Self::UsernameOk,
             "UNKNOWN_COMMAND" => Self::UnknownCommand,
+            "UNKNOWN_USER" => Self::UnknownUser,
             "GLIDE_REQ_OK" => Self::GlideRequestSent,
             // Eg: CONNECTED_USERS user1 user2 user3
             x if x.starts_with("CONNECTED_USERS ") => Self::ConnectedUsers(
@@ -57,11 +59,12 @@ impl ServerSignal {
         Ok(signal)
     }
 
-    pub fn to_string(self) -> String {
+    pub fn to_string(&self) -> String {
         match self {
             Self::UsernameInvalid => "INVALID_USERNAME".to_string(),
             Self::UsernameTaken => "USERNAME_TAKEN".to_string(),
             Self::UsernameOk => "USERNAME_OK".to_string(),
+            Self::UnknownUser => "UNKNOWN_USER".to_string(),
             Self::UnknownCommand => "UNKNOWN_COMMAND".to_string(),
             Self::GlideRequestSent => "GLIDE_REQ_OK".to_string(),
 

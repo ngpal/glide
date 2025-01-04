@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
+use utils::data::ServerResponse;
 
 use utils::{
     commands::Command,
@@ -85,20 +86,20 @@ async fn handle_client(
         let response = {
             let clients = state.lock().await;
             if !validate_username(&username) {
-                "INVALID_USERNAME"
+                ServerResponse::UsernameInvalid
             } else if clients.contains_key(&username) {
-                "USERNAME_TAKEN"
+                ServerResponse::UsernameTaken
             } else {
                 drop(clients);
                 add_client(&username, socket, &state).await?;
-                "OK"
+                ServerResponse::UsernameOk
             }
         };
 
         // Send the response to the client
-        socket.write_all(response.as_bytes()).await?;
+        socket.write_all(response.to_string().as_bytes()).await?;
 
-        if response == "OK" {
+        if matches!(response, ServerResponse::UsernameOk) {
             println!("Client @{} connected", username);
             break;
         }
