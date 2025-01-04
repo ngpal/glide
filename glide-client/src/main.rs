@@ -2,8 +2,10 @@ use regex::Regex;
 use std::env;
 use std::io::Write;
 use std::io::{self, BufRead};
+use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use utils::commands::Command;
 
 const CHUNK_SIZE: usize = 1024;
 
@@ -27,6 +29,76 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = TcpStream::connect(&address).await?;
     println!("Connected to server at {}!", address);
 
+    let _username = login(&mut stream).await?;
+
+    // Command loop
+    let stdin = io::stdin();
+    let mut input = String::new();
+
+    println!("Type 'help' to see available commands.");
+
+    loop {
+        // Get user input
+        input.clear();
+        print!("glide> ");
+        io::stdout().flush()?;
+        stdin.lock().read_line(&mut input)?;
+
+        let input = input.trim();
+        if input == "exit" {
+            println!("Thank you for using Glide. Goodbye!");
+            break;
+        }
+
+        // Parse the command
+        let command = Command::parse(input);
+
+        // Validate glide command
+        if let Command::Glide { path, to: _ } = &command {
+            // Check if file exists
+            if Path::new(&path).try_exists().is_err() || !Path::new(&path).is_file() {
+                println!("Path '{}' is invalid. File does not exist", path);
+                continue;
+            }
+        }
+
+        // Send command to the server
+        stream.write_all(input.as_bytes()).await?;
+
+        // Await server response
+        let mut response = vec![0; CHUNK_SIZE];
+        let bytes_read = stream.read(&mut response).await?;
+        if bytes_read == 0 {
+            println!("Server disconnected.");
+            break;
+        }
+
+        // Print server response
+        let response_str = String::from_utf8_lossy(&response[..bytes_read]);
+        println!("{}", response_str);
+
+        // Block client until OK signal
+        if let Command::Glide { path, to } = &command {
+            if !response_str.starts_with("Successfully") {
+                return Ok(());
+            }
+
+            println!("Waiting for @{} to respond...", to);
+
+            // Await server response
+            let mut response = vec![0; CHUNK_SIZE];
+            let bytes_read = stream.read(&mut response).await?;
+            if bytes_read == 0 {
+                println!("Server disconnected.");
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn login(stream: &mut TcpStream) -> Result<String, Box<dyn std::error::Error>> {
     let mut username = String::new();
 
     loop {
@@ -74,43 +146,7 @@ Please try again with a valid username."
         }
     }
 
-    // Command loop
-    let stdin = io::stdin();
-    let mut input = String::new();
-
-    println!("Type 'help' to see available commands.");
-
-    loop {
-        // Get user input
-        input.clear();
-        print!("glide> ");
-        io::stdout().flush()?;
-        stdin.lock().read_line(&mut input)?;
-
-        let command = input.trim();
-
-        if command == "exit" {
-            println!("Thank you for using Glide. Goodbye!");
-            break;
-        }
-
-        // Send command to the server
-        stream.write_all(command.as_bytes()).await?;
-
-        // Await server response
-        let mut response = vec![0; CHUNK_SIZE];
-        let bytes_read = stream.read(&mut response).await?;
-        if bytes_read == 0 {
-            println!("Server disconnected.");
-            break;
-        }
-
-        // Print server response
-        let response_str = String::from_utf8_lossy(&response[..bytes_read]);
-        println!("{}", response_str);
-    }
-
-    Ok(())
+    Ok(username)
 }
 
 fn validate_username(username: &str) -> bool {

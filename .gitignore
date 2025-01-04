@@ -1,6 +1,6 @@
-/target
+# Ignore all target folders
+target/
+**/target/
 
-
-# Added by cargo
-
+# Ignore macOS DS_Store files
 .DS_Store
