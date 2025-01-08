@@ -156,7 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Receiving file: {} ({} bytes)", file_name, file_size);
 
                 // Create a file to save the incoming data
-                let mut file = tokio::fs::File::create(format!("new_{}", &file_name)).await?;
+                let mut file = tokio::fs::File::create(&file_name).await?;
 
                 // Receive chunks and write to file
                 let mut total_bytes_received = 0;
@@ -176,7 +176,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         total_bytes_received as f64 / file_size as f64 * 100.0
                     );
                 }
-                println!("File transfer completed: new_{}", file_name);
+                println!("File transfer completed: {}", file_name);
             }
             Command::List => {
                 let ServerResponse::ConnectedUsers(users) = response else {
