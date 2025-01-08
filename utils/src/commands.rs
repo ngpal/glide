@@ -187,6 +187,7 @@ impl Command {
                 )
                 .await?;
             println!("Metadata sent!");
+            dbg!(file_length);
 
             // Calculate the number of chunks
             let partial_chunk_size = file_length % CHUNK_SIZE as u64;
@@ -203,7 +204,7 @@ impl Command {
                 stream.write_all(&buffer[..bytes_read]).await?;
             }
 
-            println!("\nFile sent successfully!");
+            println!("File sent successfully!");
 
             // Remove the file
             tokio::fs::remove_file(format!("{}/{}/{}", from, username, filename)).await?;
