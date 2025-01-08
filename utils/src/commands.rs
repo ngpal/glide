@@ -1,12 +1,13 @@
 use regex::Regex;
 use tokio::{
+    fs::{self, File},
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     sync::Mutex,
 };
 
 use crate::data::{Request, ServerResponse, UserData, CHUNK_SIZE};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 type SharedState = Arc<Mutex<HashMap<String, UserData>>>;
 
@@ -70,19 +71,19 @@ impl Command {
     pub async fn handle(
         command: &str,
         username: &str,
-        socket: &mut TcpStream,
+        stream: &mut TcpStream,
         state: &SharedState,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let command = Command::parse(command);
         let response = command.execute(state, username).await;
-        socket.write_all(response.to_string().as_bytes()).await?;
+        stream.write_all(response.to_string().as_bytes()).await?;
 
         // If the reponse was GlideRequestSent, receive file
         if matches!(response, ServerResponse::GlideRequestSent) {
             let mut buffer = vec![0; CHUNK_SIZE];
 
             // Read metadata (file name and size)
-            let bytes_read = socket.read(&mut buffer).await?;
+            let bytes_read = stream.read(&mut buffer).await?;
             if bytes_read == 0 {
                 return Ok(()); // Client disconnected
             }
@@ -106,13 +107,21 @@ impl Command {
             };
 
             // Create a file to save the incoming data
-            let mut file =
-                tokio::fs::File::create(format!("{}/{}/{}", username, to, &file_name)).await?;
+
+            let file_path = format!("{}/{}/{}", username, to, file_name);
+
+            // Ensure the parent directories exist
+            if let Some(parent_dir) = std::path::Path::new(&file_path).parent() {
+                tokio::fs::create_dir_all(parent_dir).await?;
+            }
+
+            // Now create the file
+            let mut file = tokio::fs::File::create(file_path).await?;
 
             // Receive chunks and write to file
             let mut total_bytes_received = 0;
             while total_bytes_received < file_size {
-                let bytes_read = socket.read(&mut buffer).await?;
+                let bytes_read = stream.read(&mut buffer).await?;
                 if bytes_read == 0 {
                     println!("Client disconnected unexpectedly");
                     break;
@@ -128,6 +137,76 @@ impl Command {
                 );
             }
             println!("File transfer completed: {}", file_name);
+        } else if matches!(response, ServerResponse::OkSuccess) {
+            dbg!("Sending file...");
+
+            // Get the request
+            let Command::Ok(from) = command else {
+                unreachable!();
+            };
+
+            let filename = {
+                let clients = state.lock().await;
+
+                if let Some(requests) = clients.get(username).map(|c| &c.incoming_requests) {
+                    // use a labeled loop for breaking with a value
+                    'outer: loop {
+                        for Request {
+                            from_username,
+                            filename,
+                        } in requests.iter()
+                        {
+                            if from_username == &from {
+                                // break with the value
+                                break 'outer filename.clone();
+                            }
+                        }
+
+                        unreachable!()
+                    }
+                } else {
+                    unreachable!()
+                }
+            };
+
+            let path = &format!("{}/{}/{}", from, username, filename);
+
+            // Send file over to the user
+            let metadata = fs::metadata(&path).await?;
+            let file_length = metadata.len();
+
+            // Send metadata
+            stream
+                .write_all(
+                    format!(
+                        "{}:{}",
+                        Path::new(&path).file_name().unwrap().to_string_lossy(),
+                        file_length
+                    )
+                    .as_bytes(),
+                )
+                .await?;
+            println!("Metadata sent!");
+
+            // Calculate the number of chunks
+            let partial_chunk_size = file_length % CHUNK_SIZE as u64;
+            let chunk_count = file_length / CHUNK_SIZE as u64 + (partial_chunk_size > 0) as u64;
+
+            // Read and send chunks
+            let mut file = File::open(&path).await?;
+            let mut buffer = vec![0; CHUNK_SIZE];
+            for _ in 0..chunk_count {
+                let bytes_read = file.read(&mut buffer).await?;
+                if bytes_read == 0 {
+                    break;
+                }
+                stream.write_all(&buffer[..bytes_read]).await?;
+            }
+
+            println!("\nFile sent successfully!");
+
+            // Remove the file
+            tokio::fs::remove_file(format!("{}/{}/{}", from, username, filename)).await?;
         }
 
         Ok(())
@@ -168,20 +247,57 @@ impl Command {
             .incoming_requests
             .push(Request {
                 from_username: username.to_string(),
-                filename: path.to_string(),
+                filename: Path::new(path)
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_string(),
             });
 
         ServerResponse::GlideRequestSent
     }
 
     async fn cmd_ok(&self, state: &SharedState, username: &str) -> ServerResponse {
-        // When the Ok command is sent, we check if the Ok is valid, and let the handler
-        // do the rest
+        let Command::Ok(from) = self else {
+            unreachable!()
+        };
 
-        todo!()
+        let clients = state.lock().await;
+
+        if let Some(client) = clients.get(username) {
+            let valid_request = client
+                .incoming_requests
+                .iter()
+                .any(|req| &req.from_username == from);
+
+            if valid_request {
+                return ServerResponse::OkSuccess;
+            }
+        }
+
+        ServerResponse::OkFailed
     }
 
     async fn cmd_no(&self, state: &SharedState, username: &str) -> ServerResponse {
-        todo!()
+        let Command::No(from) = self else {
+            unreachable!()
+        };
+
+        let mut clients = state.lock().await;
+
+        if let Some(client) = clients.get_mut(username) {
+            if let Some(pos) = client
+                .incoming_requests
+                .iter()
+                .position(|req| &req.from_username == from)
+            {
+                let request = client.incoming_requests.remove(pos);
+                let file_path = format!("{}/{}/{}", from, username, request.filename);
+                let _ = tokio::fs::remove_file(file_path).await; // ignore errors
+            }
+        }
+
+        ServerResponse::NoSuccess
     }
 }

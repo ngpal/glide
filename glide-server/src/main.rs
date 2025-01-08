@@ -165,6 +165,9 @@ async fn remove_client(username: &str, state: &SharedState) {
         }
     }
 
+    // Remove folder under user
+    fs::remove_dir_all(username);
+
     println!("Client @{} disconnected", username);
 }
 

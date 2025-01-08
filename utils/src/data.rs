@@ -25,6 +25,8 @@ pub enum ServerResponse {
     IncomingRequests(Vec<Request>),
     GlideRequestSent,
     OkFailed,
+    OkSuccess,
+    NoSuccess,
 }
 
 impl ServerResponse {
@@ -36,6 +38,8 @@ impl ServerResponse {
             "UNKNOWN_COMMAND" => Self::UnknownCommand,
             "UNKNOWN_USER" => Self::UnknownUser,
             "OK_CMD_FAILED" => Self::OkFailed,
+            "OK_CMD_OK" => Self::OkSuccess,
+            "NO_OK" => Self::NoSuccess,
             "GLIDE_REQ_OK" => Self::GlideRequestSent,
             // Eg: CONNECTED_USERS user1 user2 user3
             x if x.starts_with("CONNECTED_USERS ") => Self::ConnectedUsers(
@@ -79,6 +83,8 @@ impl ServerResponse {
             Self::UnknownCommand => "UNKNOWN_COMMAND".to_string(),
             Self::GlideRequestSent => "GLIDE_REQ_OK".to_string(),
             Self::OkFailed => "OK_CMD_FAILED".to_string(),
+            Self::OkSuccess => "OK_CMD_OK".to_string(),
+            Self::NoSuccess => "NO_OK".to_string(),
             Self::ConnectedUsers(users) => {
                 format!("CONNECTED_USERS {}", users.join(" "))
             }
