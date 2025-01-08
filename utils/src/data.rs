@@ -1,3 +1,7 @@
+use std::io::Error;
+
+pub const CHUNK_SIZE: usize = 1024;
+
 #[derive(Clone, Debug)]
 pub struct Request {
     pub from_username: String,
@@ -20,16 +24,18 @@ pub enum ServerResponse {
     ConnectedUsers(Vec<String>),
     IncomingRequests(Vec<Request>),
     GlideRequestSent,
+    OkFailed,
 }
 
 impl ServerResponse {
-    pub fn from(string: &str) -> Result<ServerResponse, String> {
+    pub fn from(string: &str) -> Result<ServerResponse, Error> {
         let signal = match string {
             "INVALID_USERNAME" => Self::UsernameInvalid,
             "USERNAME_TAKEN" => Self::UsernameTaken,
             "USERNAME_OK" => Self::UsernameOk,
             "UNKNOWN_COMMAND" => Self::UnknownCommand,
             "UNKNOWN_USER" => Self::UnknownUser,
+            "OK_CMD_FAILED" => Self::OkFailed,
             "GLIDE_REQ_OK" => Self::GlideRequestSent,
             // Eg: CONNECTED_USERS user1 user2 user3
             x if x.starts_with("CONNECTED_USERS ") => Self::ConnectedUsers(
@@ -53,7 +59,12 @@ impl ServerResponse {
                     .collect(),
             ),
 
-            _ => return Err(format!("Unable to parse {}", string)),
+            x => {
+                return Err(Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Unable to parse '{}'", x),
+                ))
+            }
         };
 
         Ok(signal)
@@ -67,7 +78,7 @@ impl ServerResponse {
             Self::UnknownUser => "UNKNOWN_USER".to_string(),
             Self::UnknownCommand => "UNKNOWN_COMMAND".to_string(),
             Self::GlideRequestSent => "GLIDE_REQ_OK".to_string(),
-
+            Self::OkFailed => "OK_CMD_FAILED".to_string(),
             Self::ConnectedUsers(users) => {
                 format!("CONNECTED_USERS {}", users.join(" "))
             }

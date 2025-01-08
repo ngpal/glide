@@ -1,13 +1,13 @@
 use regex::Regex;
-use std::env;
-use std::io::Write;
-use std::io::{self, BufRead};
+use std::fs::File;
+use std::io::{self, BufRead, Read};
+use std::io::{Error, Write};
 use std::path::Path;
+use std::{env, fs};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use utils::commands::Command;
-
-const CHUNK_SIZE: usize = 1024;
+use utils::data::{ServerResponse, CHUNK_SIZE};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -64,34 +64,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Send command to the server
         stream.write_all(input.as_bytes()).await?;
+        let response = get_server_response(&mut stream).await?;
 
-        // Await server response
-        let mut response = vec![0; CHUNK_SIZE];
-        let bytes_read = stream.read(&mut response).await?;
-        if bytes_read == 0 {
-            println!("Server disconnected.");
-            break;
-        }
-
-        // Print server response
-        let response_str = String::from_utf8_lossy(&response[..bytes_read]);
-        println!("{}", response_str);
-
-        // Block client until OK signal
-        if let Command::Glide { path, to } = &command {
-            if !response_str.starts_with("Successfully") {
+        if matches!(response, ServerResponse::UnknownCommand) {
+            println!("Invalid command '{}'. Use 'help' to see more", input);
+            continue;
+        } else if let Command::Glide { path, to: _ } = &command {
+            if !matches!(response, ServerResponse::GlideRequestSent) {
+                println!("Glide request failed! {}", response.to_string());
                 return Ok(());
             }
 
-            println!("Waiting for @{} to respond...", to);
+            // Send file over to the server
+            let metadata = fs::metadata(&path);
 
-            // Await server response
-            let mut response = vec![0; CHUNK_SIZE];
-            let bytes_read = stream.read(&mut response).await?;
-            if bytes_read == 0 {
-                println!("Server disconnected.");
-                break;
+            // Send metadata
+            match metadata {
+                Ok(ref data) => {
+                    stream
+                        .write_all(
+                            format!(
+                                "{}:{}",
+                                Path::new(&path).file_name().unwrap().to_string_lossy(),
+                                data.len()
+                            )
+                            .as_bytes(),
+                        )
+                        .await?;
+                    println!("Metadata sent!");
+                }
+                Err(e) => {
+                    println!("There has been an error in locating the file:\n{}", e);
+                    continue;
+                }
             }
+
+            // Calculate the number of chunks
+            let file_length = metadata.unwrap().len();
+            let partial_chunk_size = file_length % CHUNK_SIZE as u64;
+            let chunk_count = file_length / CHUNK_SIZE as u64 + (partial_chunk_size > 0) as u64;
+
+            // Read and send chunks
+            let mut file = File::open(&path)?;
+            let mut buffer = vec![0; CHUNK_SIZE];
+            for count in 0..chunk_count {
+                let bytes_read = file.read(&mut buffer)?;
+                if bytes_read == 0 {
+                    break;
+                }
+                stream.write_all(&buffer[..bytes_read]).await?;
+                println!(
+                    "Sent chunk {}/{} ({}%)\r",
+                    count + 1,
+                    chunk_count,
+                    ((count + 1) as f64 / chunk_count as f64 * 100.0) as u8
+                );
+            }
+
+            println!("\nFile upload completed successfully!");
         }
     }
 
@@ -127,26 +157,30 @@ Please try again with a valid username."
         stream.write_all(username.as_bytes()).await?;
 
         // Wait for the server's response
-        let mut response = vec![0; CHUNK_SIZE];
-        let bytes_read = stream.read(&mut response).await?;
-        if bytes_read == 0 {
-            println!("Server disconnected unexpectedly.");
-            return Err("Connection closed by the server".into());
-        }
-
-        let response_str = String::from_utf8_lossy(&response[..bytes_read])
-            .trim()
-            .to_string();
-
-        if response_str == "OK" {
+        let response = get_server_response(stream).await?;
+        if matches!(response, ServerResponse::UsernameOk) {
             println!("You are now connected as @{}", username);
             break;
         } else {
-            println!("Server rejected username: {}", response_str);
+            println!("Server rejected username: {}", response.to_string());
         }
     }
 
     Ok(username)
+}
+
+async fn get_server_response(stream: &mut TcpStream) -> Result<ServerResponse, Error> {
+    let mut response = vec![0; CHUNK_SIZE];
+    let bytes_read = stream.read(&mut response).await?;
+    if bytes_read == 0 {
+        println!("Server disconnected unexpectedly.");
+        return Err(Error::new(
+            io::ErrorKind::Other,
+            "Connection closed by server",
+        ));
+    }
+
+    ServerResponse::from(&String::from_utf8_lossy(&response))
 }
 
 fn validate_username(username: &str) -> bool {
