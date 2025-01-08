@@ -146,6 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let (file_name, file_size) = {
                     let metadata = String::from_utf8_lossy(&buffer[..bytes_read]);
                     let parts: Vec<&str> = metadata.split(':').collect();
+                    dbg!(&parts);
                     if parts.len() != 2 {
                         return Err("Invalid metadata format".into());
                     }
