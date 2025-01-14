@@ -1,13 +1,10 @@
-use regex::Regex;
-use tokio::{
-    fs::{self, File},
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-    sync::Mutex,
+use crate::{
+    data::{Request, ServerResponse, UserData},
+    transfers,
 };
-
-use crate::data::{Request, ServerResponse, UserData, CHUNK_SIZE};
+use regex::Regex;
 use std::{collections::HashMap, path::Path, sync::Arc};
+use tokio::{io::AsyncWriteExt, net::TcpStream, sync::Mutex};
 
 type SharedState = Arc<Mutex<HashMap<String, UserData>>>;
 
@@ -80,67 +77,70 @@ impl Command {
 
         // If the reponse was GlideRequestSent, receive file
         if matches!(response, ServerResponse::GlideRequestSent) {
-            let mut buffer = vec![0; CHUNK_SIZE];
-
-            // Read metadata (file name and size)
-            let bytes_read = stream.read(&mut buffer).await?;
-            if bytes_read == 0 {
-                return Ok(()); // Client disconnected
-            }
-
-            // Extract metadata
-            let (file_name, file_size) = {
-                let metadata = String::from_utf8_lossy(&buffer[..bytes_read]);
-                let parts: Vec<&str> = metadata.split(':').collect();
-                dbg!(&parts);
-                if parts.len() != 2 {
-                    return Err("Invalid metadata format".into());
-                }
-                let file_name = parts[0].trim().to_string();
-                let file_size: u64 = parts[1].trim().parse()?;
-                (file_name, file_size)
-            };
-            println!("Receiving file: {} ({} bytes)", file_name, file_size);
-
-            // Get to username
+            // Create a directory to save the incoming data
             let Command::Glide { to, .. } = command else {
                 unreachable!("the command should always be glide")
             };
-
-            // Create a file to save the incoming data
-
-            let file_path = format!("{}/{}/{}", username, to, file_name);
+            let file_path = format!("{}/{}", username, to);
 
             // Ensure the parent directories exist
             if let Some(parent_dir) = std::path::Path::new(&file_path).parent() {
                 tokio::fs::create_dir_all(parent_dir).await?;
             }
 
-            // Now create the file
-            let mut file = tokio::fs::File::create(file_path).await?;
+            transfers::receive_file(stream, &file_path).await?;
 
-            // Receive chunks and write to file
-            let mut total_bytes_received = 0;
-            while total_bytes_received < file_size {
-                let bytes_read = stream.read(&mut buffer).await?;
-                if bytes_read == 0 {
-                    println!("Client disconnected unexpectedly");
-                    break;
-                }
+            // // Extract metadata
+            // let (file_name, file_size) = {
+            //     let metadata = String::from_utf8_lossy(&buffer[..bytes_read]);
+            //     let parts: Vec<&str> = metadata.split(':').collect();
+            //     dbg!(&parts);
+            //     if parts.len() != 2 {
+            //         return Err("Invalid metadata format".into());
+            //     }
+            //     let file_name = parts[0].trim().to_string();
+            //     let file_size: u64 = parts[1].trim().parse()?;
+            //     (file_name, file_size)
+            // };
+            // println!("Receiving file: {} ({} bytes)", file_name, file_size);
 
-                file.write_all(&buffer[..bytes_read]).await?;
-                total_bytes_received += bytes_read as u64;
-                println!(
-                    "Progress: {}/{} bytes ({:.2}%)",
-                    total_bytes_received,
-                    file_size,
-                    total_bytes_received as f64 / file_size as f64 * 100.0
-                );
-            }
-            println!("File transfer completed: {}", file_name);
+            // // Get to username
+            // let Command::Glide { to, .. } = command else {
+            //     unreachable!("the command should always be glide")
+            // };
+
+            // // Create a file to save the incoming data
+
+            // let file_path = format!("{}/{}/{}", username, to, file_name);
+
+            // // Ensure the parent directories exist
+            // if let Some(parent_dir) = std::path::Path::new(&file_path).parent() {
+            //     tokio::fs::create_dir_all(parent_dir).await?;
+            // }
+
+            // // Now create the file
+            // let mut file = tokio::fs::File::create(file_path).await?;
+
+            // // Receive chunks and write to file
+            // let mut total_bytes_received = 0;
+            // while total_bytes_received < file_size {
+            //     let bytes_read = stream.read(&mut buffer).await?;
+            //     if bytes_read == 0 {
+            //         println!("Client disconnected unexpectedly");
+            //         break;
+            //     }
+
+            //     file.write_all(&buffer[..bytes_read]).await?;
+            //     total_bytes_received += bytes_read as u64;
+            //     println!(
+            //         "Progress: {}/{} bytes ({:.2}%)",
+            //         total_bytes_received,
+            //         file_size,
+            //         total_bytes_received as f64 / file_size as f64 * 100.0
+            //     );
+            // }
+            // println!("File transfer completed: {}", file_name);
         } else if matches!(response, ServerResponse::OkSuccess) {
-            dbg!("Sending file...");
-
             // Get the request
             let Command::Ok(from) = command else {
                 unreachable!();
@@ -170,47 +170,83 @@ impl Command {
                 }
             };
 
-            let path = &format!("{}/{}/{}", from, username, filename);
+            let path = format!("{}/{}/{}", from, username, filename);
 
-            // Send file over to the user
-            let metadata = fs::metadata(&path).await?;
-            let file_length = metadata.len();
+            transfers::send_file(stream, &path).await?;
 
-            // Send metadata
-            stream
-                .write_all(
-                    format!(
-                        "{}:{}",
-                        Path::new(&path).file_name().unwrap().to_string_lossy(),
-                        file_length
-                    )
-                    .as_bytes(),
-                )
-                .await?;
-            stream.flush().await?;
-            println!("Metadata sent!");
-            dbg!(file_length);
-
-            // Calculate the number of chunks
-            let partial_chunk_size = file_length % CHUNK_SIZE as u64;
-            let chunk_count = file_length / CHUNK_SIZE as u64 + (partial_chunk_size > 0) as u64;
-
-            // Read and send chunks
-            let mut file = File::open(&path).await?;
-            let mut buffer = vec![0; CHUNK_SIZE];
-            for _ in 0..chunk_count {
-                let bytes_read = file.read(&mut buffer).await?;
-                if bytes_read == 0 {
-                    break;
-                }
-                stream.write_all(&buffer[..bytes_read]).await?;
-            }
-
-            println!("File sent successfully!");
-
-            // Remove the file
-            tokio::fs::remove_file(format!("{}/{}/{}", from, username, filename)).await?;
+            // Remove the file after sending
+            tokio::fs::remove_file(&path).await?;
         }
+        //     // Get the request
+        //     let Command::Ok(from) = command else {
+        //         unreachable!();
+        //     };
+
+        //     let filename = {
+        //         let clients = state.lock().await;
+
+        //         if let Some(requests) = clients.get(username).map(|c| &c.incoming_requests) {
+        //             // use a labeled loop for breaking with a value
+        //             'outer: loop {
+        //                 for Request {
+        //                     from_username,
+        //                     filename,
+        //                 } in requests.iter()
+        //                 {
+        //                     if from_username == &from {
+        //                         // break with the value
+        //                         break 'outer filename.clone();
+        //                     }
+        //                 }
+
+        //                 unreachable!()
+        //             }
+        //         } else {
+        //             unreachable!()
+        //         }
+        //     };
+
+        //     let path = &format!("{}/{}/{}", from, username, filename);
+
+        //     // Send file over to the user
+        //     let metadata = fs::metadata(&path).await?;
+        //     let file_length = metadata.len();
+
+        //     // Send metadata
+        //     stream
+        //         .write_all(
+        //             format!(
+        //                 "{}:{}",
+        //                 Path::new(&path).file_name().unwrap().to_string_lossy(),
+        //                 file_length
+        //             )
+        //             .as_bytes(),
+        //         )
+        //         .await?;
+        //     stream.flush().await?;
+        //     println!("Metadata sent!");
+        //     dbg!(file_length);
+
+        //     // Calculate the number of chunks
+        //     let partial_chunk_size = file_length % CHUNK_SIZE as u64;
+        //     let chunk_count = file_length / CHUNK_SIZE as u64 + (partial_chunk_size > 0) as u64;
+
+        //     // Read and send chunks
+        //     let mut file = File::open(&path).await?;
+        //     let mut buffer = vec![0; CHUNK_SIZE];
+        //     for _ in 0..chunk_count {
+        //         let bytes_read = file.read(&mut buffer).await?;
+        //         if bytes_read == 0 {
+        //             break;
+        //         }
+        //         stream.write_all(&buffer[..bytes_read]).await?;
+        //     }
+
+        //     println!("File sent successfully!");
+
+        //     // Remove the file
+        //     tokio::fs::remove_file(format!("{}/{}/{}", from, username, filename)).await?;
+        // }
 
         Ok(())
     }

@@ -1,13 +1,13 @@
 use regex::Regex;
-use std::fs::File;
-use std::io::{self, BufRead, Read};
+use std::env;
+use std::io::{self, BufRead};
 use std::io::{Error, Write};
 use std::path::Path;
-use std::{env, fs};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use utils::commands::Command;
 use utils::data::{ServerResponse, CHUNK_SIZE};
+use utils::transfers;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -73,58 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         match command {
             Command::Glide { path, to: _ } => {
-                if !matches!(response, ServerResponse::GlideRequestSent) {
-                    println!("Glide request failed! {}", response.to_string());
-                    return Ok(());
-                }
-
-                // Send file over to the server
-                let metadata = fs::metadata(&path);
-
-                // Send metadata
-                match metadata {
-                    Ok(ref data) => {
-                        stream
-                            .write_all(
-                                format!(
-                                    "{}:{}",
-                                    Path::new(&path).file_name().unwrap().to_string_lossy(),
-                                    data.len()
-                                )
-                                .as_bytes(),
-                            )
-                            .await?;
-                        println!("Metadata sent!");
-                    }
-                    Err(e) => {
-                        println!("There has been an error in locating the file:\n{}", e);
-                        continue;
-                    }
-                }
-
-                // Calculate the number of chunks
-                let file_length = metadata.unwrap().len();
-                let partial_chunk_size = file_length % CHUNK_SIZE as u64;
-                let chunk_count = file_length / CHUNK_SIZE as u64 + (partial_chunk_size > 0) as u64;
-
-                // Read and send chunks
-                let mut file = File::open(&path)?;
-                let mut buffer = vec![0; CHUNK_SIZE];
-                for count in 0..chunk_count {
-                    let bytes_read = file.read(&mut buffer)?;
-                    if bytes_read == 0 {
-                        break;
-                    }
-                    stream.write_all(&buffer[..bytes_read]).await?;
-                    println!(
-                        "Sent chunk {}/{} ({}%)\r",
-                        count + 1,
-                        chunk_count,
-                        ((count + 1) as f64 / chunk_count as f64 * 100.0) as u8
-                    );
-                }
-
-                println!("\nFile upload completed successfully!");
+                transfers::send_file(&mut stream, &path).await?;
             }
             Command::Ok(_) => {
                 if matches!(response, ServerResponse::OkSuccess) {
@@ -133,51 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("`ok` failed :(");
                 }
 
-                let mut buffer = vec![0; CHUNK_SIZE];
-
-                // Read metadata (file name and size)
-                let bytes_read = stream.read(&mut buffer).await?;
-                if bytes_read == 0 {
-                    println!("Server disconnected");
-                    return Ok(()); // Server disconnected
-                }
-
-                // Extract metadata
-                let (file_name, file_size) = {
-                    let metadata = String::from_utf8_lossy(&buffer[..bytes_read]);
-                    let parts: Vec<&str> = metadata.split(':').collect();
-                    dbg!(&parts);
-                    if parts.len() != 2 {
-                        return Err("Invalid metadata format".into());
-                    }
-                    let file_name = parts[0].trim().to_string();
-                    let file_size: u64 = parts[1].trim().parse()?;
-                    (file_name, file_size)
-                };
-                println!("Receiving file: {} ({} bytes)", file_name, file_size);
-
-                // Create a file to save the incoming data
-                let mut file = tokio::fs::File::create(&file_name).await?;
-
-                // Receive chunks and write to file
-                let mut total_bytes_received = 0;
-                while total_bytes_received < file_size {
-                    let bytes_read = stream.read(&mut buffer).await?;
-                    if bytes_read == 0 {
-                        println!("Client disconnected unexpectedly");
-                        break;
-                    }
-
-                    file.write_all(&buffer[..bytes_read]).await?;
-                    total_bytes_received += bytes_read as u64;
-                    println!(
-                        "Progress: {}/{} bytes ({:.2}%)",
-                        total_bytes_received,
-                        file_size,
-                        total_bytes_received as f64 / file_size as f64 * 100.0
-                    );
-                }
-                println!("File transfer completed: {}", file_name);
+                transfers::receive_file(&mut stream, ".").await?;
             }
             Command::List => {
                 let ServerResponse::ConnectedUsers(users) = response else {
