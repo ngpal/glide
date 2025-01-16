@@ -1,0 +1,56 @@
+Protocol
+--------
+
+What information are we sending around?
+- Client to Server
+	- Username
+	- Commands and arguments
+	- File Metadata
+	- File chunks
+	- Exit signal?
+- Server to Client
+	- Username validation (OK/INVALID/TAKEN)
+	- Invalid command
+	- Unknown user
+	- Connected users
+	- Incoming requests
+	- File metadata
+	- File chunks
+	- OK command failed (NO REQUEST)
+	- NO command success
+
+1 byte unique code, followed by behaviour unique to the code
+
+What items need unique codes?
+- Username
+	- 1 followed by \0 terminated username
+- Username OK
+	- 2
+- Username INVALID
+	- 3
+- Username TAKEN
+	- 4
+- File metadata
+	- 5 followed by null terminated filename followed by 4 bytes for file size BE
+- File chunk
+	- 6 followed by null terminated filename, 2 bytes for chunk size BE, followed by data
+- Connected users
+	- 7 followed by 2 bytes for number of users BE, followed by null terminated usernames
+- Incoming requests
+	- 8 followed by 2 bytes for number of requests BE, followed by "<from>\0<filename>\0"
+- Commands
+	- 9 followed by 1 byte command code
+
+	Command codes:
+		- list = 1
+		- reqs = 2
+		- glide = 3 followed by <path>\0<username>\0
+		- ok = 4 followed by <username>\0
+		- no = 4 followed by <username>\0
+
+- OK Command failed
+	- 10
+- NO Command success
+	- 11
+- Client disconnected
+	- 12

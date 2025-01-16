@@ -1,6 +1,7 @@
 # Ignore all target folders
 target/
 **/target/
+test.*
 
 # Ignore macOS DS_Store files
 .DS_Store

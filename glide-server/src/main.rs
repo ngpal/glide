@@ -27,14 +27,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut network_ip = "127.0.0.1".to_string(); // Default to localhost
 
     for iface in get_if_addrs()? {
-        match iface.addr {
-            IfAddr::V4(v4_addr) => {
-                // Use the first non-loopback IPv4 address as the network IP
-                if !v4_addr.ip.is_loopback() && network_ip == "127.0.0.1" {
-                    network_ip = v4_addr.ip.to_string();
-                }
+        if let IfAddr::V4(v4_addr) = iface.addr {
+            // Use the first non-loopback IPv4 address as the network IP
+            if !v4_addr.ip.is_loopback() && network_ip == "127.0.0.1" {
+                network_ip = v4_addr.ip.to_string();
             }
-            _ => (),
         }
     }
 
@@ -76,11 +73,7 @@ async fn handle_client(
         }
 
         username.clear();
-        username.push_str(
-            &String::from_utf8_lossy(&buffer[..bytes_read])
-                .trim()
-                .to_string(),
-        );
+        username.push_str(String::from_utf8_lossy(&buffer[..bytes_read]).trim());
 
         // Check if the username is valid and available
         let response = {
