@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
-use utils::data::ServerResponse;
+use utils::protocol::Transmission;
 
 use utils::{
     commands::Command,
@@ -59,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn handle_client(
-    socket: &mut TcpStream,
+    stream: &mut TcpStream,
     state: SharedState,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut buffer = vec![0; CHUNK_SIZE];
@@ -67,32 +67,31 @@ async fn handle_client(
 
     // Loop until a valid username is provided
     loop {
-        let bytes_read = socket.read(&mut buffer).await?;
-        if bytes_read == 0 {
-            return Ok(()); // Client disconnected
+        let response = Transmission::from_stream(stream).await?;
+        if let Transmission::Username(uname) = response {
+            username = uname;
+        } else {
+            continue;
         }
-
-        username.clear();
-        username.push_str(String::from_utf8_lossy(&buffer[..bytes_read]).trim());
 
         // Check if the username is valid and available
         let response = {
             let clients = state.lock().await;
             if !validate_username(&username) {
-                ServerResponse::UsernameInvalid
+                Transmission::UsernameInvalid
             } else if clients.contains_key(&username) {
-                ServerResponse::UsernameTaken
+                Transmission::UsernameTaken
             } else {
                 drop(clients);
-                add_client(&username, socket, &state).await?;
-                ServerResponse::UsernameOk
+                add_client(&username, stream, &state).await?;
+                Transmission::UsernameOk
             }
         };
 
         // Send the response to the client
-        socket.write_all(response.to_string().as_bytes()).await?;
+        stream.write_all(response.to_string().as_bytes()).await?;
 
-        if matches!(response, ServerResponse::UsernameOk) {
+        if matches!(response, Transmission::UsernameOk) {
             println!("Client @{} connected", username);
             break;
         }
@@ -100,17 +99,20 @@ async fn handle_client(
 
     // Start command handling loop (e.g., list, help, etc.)
     loop {
-        let bytes_read = socket.read(&mut buffer).await?;
-        if bytes_read == 0 {
-            remove_client(&username, &state).await;
-            break;
+        let command;
+
+        match Transmission::from_stream(stream).await? {
+            Transmission::Command(cmd) => command = cmd,
+            something_else => {
+                println!(
+                    "Didn't recieve command when I should have\n{:#?}",
+                    something_else
+                );
+                continue;
+            }
         }
 
-        let command = String::from_utf8_lossy(&buffer[..bytes_read])
-            .trim()
-            .to_string();
-
-        if let Err(e) = Command::handle(&command, &username, socket, &state).await {
+        if let Err(e) = Command::handle(command, &username, stream, &state).await {
             println!("Error handling command for @{}: {}", username, e);
             break;
         }
@@ -145,7 +147,7 @@ async fn remove_client(username: &str, state: &SharedState) {
     let mut to_remove = Vec::new();
     for (user, client) in clients.iter() {
         for (i, req) in client.incoming_requests.iter().enumerate() {
-            if req.from_username == username {
+            if req.sender == username {
                 to_remove.push((user.clone(), i));
             }
         }
