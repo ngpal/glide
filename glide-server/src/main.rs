@@ -67,8 +67,8 @@ async fn handle_client(
 
     // Loop until a valid username is provided
     loop {
-        let response = Transmission::from_stream(stream).await?;
-        if let Transmission::Username(uname) = response {
+        let input = Transmission::from_stream(stream).await?;
+        if let Transmission::Username(uname) = input {
             username = uname;
         } else {
             continue;
@@ -89,7 +89,7 @@ async fn handle_client(
         };
 
         // Send the response to the client
-        stream.write_all(response.to_string().as_bytes()).await?;
+        stream.write_all(response.to_bytes().as_slice()).await?;
 
         if matches!(response, Transmission::UsernameOk) {
             println!("Client @{} connected", username);
@@ -111,6 +111,8 @@ async fn handle_client(
                 continue;
             }
         }
+
+        println!("Handling command {:#?} for {}", command, username);
 
         if let Err(e) = Command::handle(command, &username, stream, &state).await {
             println!("Error handling command for @{}: {}", username, e);
