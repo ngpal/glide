@@ -1,12 +1,12 @@
 use regex::Regex;
 use std::env;
+use std::io::Write;
 use std::io::{self, BufRead};
-use std::io::{Error, Write};
 use std::path::Path;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use utils::commands::Command;
-use utils::data::{ServerResponse, CHUNK_SIZE};
+use utils::protocol::Transmission;
 use utils::transfers;
 
 #[tokio::main]
@@ -53,6 +53,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Parse the command
         let command = Command::parse(input);
 
+        if !validate_command(&command.to_string()) {
+            println!("Invalid command '{}'. Use 'help' to see more", input);
+            continue;
+        }
+
         // Validate glide command
         if let Command::Glide { path, to: _ } = &command {
             // Check if file exists
@@ -63,30 +68,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Send command to the server
-        stream.write_all(input.as_bytes()).await?;
-        let response = get_server_response(&mut stream).await?;
-
-        if matches!(response, ServerResponse::UnknownCommand) {
-            println!("Invalid command '{}'. Use 'help' to see more", input);
-            continue;
-        }
+        stream
+            .write_all(Transmission::Command(command.clone()).to_bytes().as_slice())
+            .await?;
+        let response = Transmission::from_stream(&mut stream).await?;
 
         match command {
             Command::Glide { path, to: _ } => {
-                transfers::send_file(&mut stream, &path).await?;
+                if matches!(response, Transmission::GlideRequestSent) {
+                    println!("Glide request is good to go! yuppe");
+                    transfers::send_file(&mut stream, &path).await?;
+                } else if matches!(response, Transmission::UsernameInvalid) {
+                    println!("Unable to send glide request, username invalid");
+                } else {
+                    println!("Unable to send glide request\n{:#?}", response);
+                }
             }
             Command::Ok(_) => {
-                if matches!(response, ServerResponse::OkSuccess) {
-                    println!("Getting file...");
+                if matches!(response, Transmission::OkSuccess) {
+                    transfers::receive_file(&mut stream, ".").await?;
                 } else {
-                    println!("`ok` failed :(");
+                    println!("`ok` command failed! Invalid request")
                 }
-
-                transfers::receive_file(&mut stream, ".").await?;
             }
             Command::List => {
-                let ServerResponse::ConnectedUsers(users) = response else {
-                    println!("Command failed\n{}", response.to_string());
+                let Transmission::ConnectedUsers(users) = response else {
+                    println!("Command failed\n{:#?}", response);
                     return Ok(());
                 };
 
@@ -96,14 +103,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Command::Requests => {
-                let ServerResponse::IncomingRequests(reqs) = response else {
-                    println!("Command failed\n{}", response.to_string());
+                let Transmission::IncomingRequests(reqs) = response else {
+                    println!("Command failed\n{:#?}", response);
                     return Ok(());
                 };
 
                 println!("Incoming requests:");
                 for req in reqs.iter() {
-                    println!(" From: {}, File: {}", req.from_username, req.filename);
+                    println!(" From: {}, File: {}", req.sender, req.filename);
                 }
             }
             _ => {}
@@ -139,36 +146,49 @@ Please try again with a valid username."
         }
 
         // Send the username to the server
-        stream.write_all(username.as_bytes()).await?;
+        stream
+            .write_all(
+                Transmission::Username(username.to_string())
+                    .to_bytes()
+                    .as_slice(),
+            )
+            .await?;
 
         // Wait for the server's response
-        let response = get_server_response(stream).await?;
-        if matches!(response, ServerResponse::UsernameOk) {
+        let response = Transmission::from_stream(stream).await?;
+        if matches!(response, Transmission::UsernameOk) {
             println!("You are now connected as @{}", username);
             break;
         } else {
-            println!("Server rejected username: {}", response.to_string());
+            println!(
+                "Server rejected username: {}",
+                match response {
+                    Transmission::UsernameTaken => "Username is taken",
+                    Transmission::UsernameInvalid => "Username is invalid",
+                    _ => unreachable!(),
+                }
+            );
         }
     }
 
     Ok(username)
 }
 
-async fn get_server_response(stream: &mut TcpStream) -> Result<ServerResponse, Error> {
-    let mut response = vec![0; CHUNK_SIZE];
-    let bytes_read = stream.read(&mut response).await?;
-    if bytes_read == 0 {
-        println!("Server disconnected unexpectedly.");
-        return Err(Error::new(
-            io::ErrorKind::Other,
-            "Connection closed by server",
-        ));
-    }
-
-    ServerResponse::from(&String::from_utf8_lossy(&response)[..bytes_read])
-}
-
 fn validate_username(username: &str) -> bool {
     let re = Regex::new(r"^[a-zA-Z0-9](?:[a-zA-Z0-9\.]{0,8}[a-zA-Z0-9])?$").unwrap();
     re.is_match(username)
+}
+
+pub fn validate_command(input: &str) -> bool {
+    let list_re = Regex::new(r"^list$").unwrap();
+    let reqs_re = Regex::new(r"^reqs$").unwrap();
+    let glide_re = Regex::new(r"^glide\s+.+\s+@\S+$").unwrap();
+    let ok_re = Regex::new(r"^ok\s+@\S+$").unwrap();
+    let no_re = Regex::new(r"^no\s+@\S+$").unwrap();
+
+    list_re.is_match(input)
+        || reqs_re.is_match(input)
+        || glide_re.is_match(input)
+        || ok_re.is_match(input)
+        || no_re.is_match(input)
 }
