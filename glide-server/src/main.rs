@@ -1,20 +1,21 @@
 #![allow(unused)]
 
 use get_if_addrs::{get_if_addrs, IfAddr};
+use log::{error, info, warn};
 use regex::Regex;
 use std::collections::HashMap;
-use std::fs;
+use std::fmt::Error;
+use std::fs::{self, remove_dir_all};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
-use utils::protocol::Transmission;
-
 use utils::{
     commands::Command,
     data::{Request, UserData},
+    protocol::Transmission,
 };
 
 const CHUNK_SIZE: usize = 1024;
@@ -22,9 +23,18 @@ const CHUNK_SIZE: usize = 1024;
 // Shared state to hold usernames and requests of connected clients
 type SharedState = Arc<Mutex<HashMap<String, UserData>>>;
 
+struct Cleanup;
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        info!("Clearing clients folder");
+        fs::remove_dir_all("./clients");
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut network_ip = "127.0.0.1".to_string(); // Default to localhost
+    env_logger::init();
 
     for iface in get_if_addrs()? {
         if let IfAddr::V4(v4_addr) = iface.addr {
@@ -38,21 +48,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Display the message with the dynamically detected IP
     println!("To connect to this server, use the following address:");
     println!("  Local clients: http://127.0.0.1:8000");
-    println!("  Network clients: http://{}:8000", network_ip);
+    println!("  Network clients: http://{}:8000\n", network_ip);
 
     let listener = TcpListener::bind("0.0.0.0:8000").await?;
-    println!("Server is running on 0.0.0.0:8000 (listening on all interfaces)");
+    info!("Server is running on 0.0.0.0:8000 (listening on all interfaces)");
     let state: SharedState = Arc::new(Mutex::new(HashMap::new()));
+    fs::create_dir("./clients");
+    let cleaner = Cleanup;
 
     loop {
         let (mut socket, addr) = listener.accept().await?;
         let state = Arc::clone(&state);
 
-        println!("New connection from: {}", addr);
+        info!("New connection from: {}", addr);
 
         tokio::spawn(async move {
             if let Err(e) = handle_client(&mut socket, state).await {
-                eprintln!("Error handling client {}: {}", addr, e);
+                error!("Error handling client {}: {}", addr, e);
             }
         });
     }
@@ -92,7 +104,7 @@ async fn handle_client(
         stream.write_all(response.to_bytes().as_slice()).await?;
 
         if matches!(response, Transmission::UsernameOk) {
-            println!("Client @{} connected", username);
+            info!("Client @{} connected", username);
             break;
         }
     }
@@ -103,8 +115,12 @@ async fn handle_client(
 
         match Transmission::from_stream(stream).await? {
             Transmission::Command(cmd) => command = cmd,
+            Transmission::ClientDisconnected => {
+                remove_client(&username, &state).await;
+                break;
+            }
             something_else => {
-                println!(
+                warn!(
                     "Didn't recieve command when I should have\n{:#?}",
                     something_else
                 );
@@ -112,10 +128,8 @@ async fn handle_client(
             }
         }
 
-        println!("Handling command {:#?} for {}", command, username);
-
         if let Err(e) = Command::handle(command, &username, stream, &state).await {
-            println!("Error handling command for @{}: {}", username, e);
+            error!("Error handling command for @{}: {}", username, e);
             break;
         }
     }
@@ -165,7 +179,7 @@ async fn remove_client(username: &str, state: &SharedState) {
     // Remove folder under user
     fs::remove_dir_all(username);
 
-    println!("Client @{} disconnected", username);
+    info!("Client @{} disconnected", username);
 }
 
 fn validate_username(username: &str) -> bool {
