@@ -47,6 +47,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let input = input.trim();
         if input == "exit" {
             println!("Thank you for using Glide. Goodbye!");
+            stream
+                .write_all(Transmission::ClientDisconnected.to_bytes().as_slice())
+                .await?;
             break;
         }
 
@@ -76,7 +79,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match command {
             Command::Glide { path, to: _ } => {
                 if matches!(response, Transmission::GlideRequestSent) {
-                    println!("Glide request is good to go! yuppe");
                     transfers::send_file(&mut stream, &path).await?;
                 } else if matches!(response, Transmission::UsernameInvalid) {
                     println!("Unable to send glide request, username invalid");

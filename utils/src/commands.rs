@@ -117,7 +117,7 @@ impl Command {
                 }
             };
 
-            let path = format!("{}/{}/{}", from, username, filename);
+            let path = format!("clients/{}/{}/{}", from, username, filename);
 
             transfers::send_file(stream, &path).await?;
 
@@ -208,7 +208,7 @@ impl Command {
                 .position(|req| &req.sender == from)
             {
                 let request = client.incoming_requests.remove(pos);
-                let file_path = format!("{}/{}/{}", from, username, request.filename);
+                let file_path = format!("clients/{}/{}/{}", from, username, request.filename);
                 let _ = tokio::fs::remove_file(file_path).await; // ignore errors
             }
         }
