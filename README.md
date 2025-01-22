@@ -2,23 +2,23 @@
 Glide is an app that runs on your LAN network, letting you share files with anyone connected to the same network as you are, without any internet at all! It's super easy to set up and use.
 ## Setup
 You need to have `cargo` installed to compile and run the server and the client as of now, unfortunately. Let's start by cloning this repository locally 
-```
+```bash
 git clone https://www.github.com/ngpal/glide.git
 cd glide
 ```
 ### Setting up the server
 To set up the server all you have to do is
-```
+```bash
 cd glide-server
 cargo run --release
 ```
 Or if you want information about who is connecting from where run with
-```
+```bash
 RUST_LOG=info cargo run --release
 ```
 ### Connecting your client
 To connect your client to the server, first locate to the `glide/glide-client` directory and run the following command with `<IP>` and `<PORT>` as the same ones given when running the server
-```
+```bash
 # In glide/glide-client
 cargo run --release -- <IP> <PORT>
 ```
