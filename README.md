@@ -1,4 +1,4 @@
-# Glide
+# Glide v1.0
 Glide is an app that runs on your LAN network, letting you share files with anyone connected to the same network as you are, without any internet at all! It's super easy to set up and use.
 ## Setup
 You need to have `cargo` installed to compile and run the server and the client as of now, unfortunately. Let's start by cloning this repository locally 
