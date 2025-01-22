@@ -79,7 +79,7 @@ impl Command {
             let Command::Glide { to, .. } = command else {
                 unreachable!("the command should always be glide")
             };
-            let file_path = format!("{}/{}", username, to);
+            let file_path = format!("clients/{}/{}", username, to);
 
             // Ensure the parent directories exist
             if let Some(parent_dir) = std::path::Path::new(&file_path).parent() {
