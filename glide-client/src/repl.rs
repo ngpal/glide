@@ -79,7 +79,7 @@ impl Repl {
                 self.increment_cursor_pos(1);
             }
             KeyCode::Backspace => {
-                if !self.buffer.is_empty() {
+                if !self.buffer.is_empty() && self.cursor_pos != 0 {
                     self.buffer.remove(self.cursor_pos as usize - 1);
                     self.decrement_cursor_pos(1);
                 }
