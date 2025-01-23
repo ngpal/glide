@@ -1,5 +1,5 @@
 use crossterm::{
-    cursor::{position, MoveToColumn, MoveToNextLine, MoveUp},
+    cursor::{position, MoveTo, MoveToColumn, MoveToNextLine, MoveToRow, MoveUp},
     event::{poll, read, Event, KeyCode, KeyEvent, KeyModifiers},
     execute, queue,
     style::{Print, PrintStyledContent, Stylize},
@@ -16,6 +16,8 @@ pub struct Repl {
     users: Vec<String>,
     buffer: String,
     cursor_pos: u16,
+    cur_input_row: u16,
+    quit: bool,
 }
 
 impl Drop for Repl {
@@ -28,7 +30,7 @@ impl Drop for Repl {
 impl Repl {
     pub fn new() -> io::Result<Self> {
         enable_raw_mode()?;
-        return Ok(Self::default());
+        Ok(Self::default())
     }
 
     fn increment_cursor_pos(&mut self, n: u16) {
@@ -41,44 +43,61 @@ impl Repl {
         self.cursor_pos = self.cursor_pos.saturating_sub(n);
     }
 
+    fn set_cur_input_row(&mut self) -> io::Result<()> {
+        self.cur_input_row = position()?.1;
+        Ok(())
+    }
+
+    fn get_output_rows(&self, output: &str) -> io::Result<u16> {
+        Ok(output.len() as u16 / size()?.1 + u16::from(output.len() as u16 % size()?.1 != 0))
+    }
+
     pub fn run(&mut self) -> io::Result<()> {
         execute!(stdout(), PrintStyledContent("> ".bold().blue()))?;
+        self.set_cur_input_row()?;
+
         loop {
             if !poll(Duration::from_millis(10))? {
                 continue;
             }
 
             match read()? {
-                Event::Key(event) => match self.handle_key_event(event)? {
-                    true => break,
-                    false => (),
-                },
+                Event::Key(event) => {
+                    self.handle_key_event(event)?;
+                }
                 _ => continue,
             };
 
             stdout().flush()?;
+
+            if self.quit {
+                break;
+            }
         }
 
         Ok(())
     }
 
-    pub fn handle_key_event(&mut self, event: KeyEvent) -> io::Result<bool> {
-        // Returns true if the code should exit
-        if let KeyEvent {
-            code: KeyCode::Char('c'),
-            modifiers: KeyModifiers::CONTROL,
-            ..
-        } = event
-        {
-            return Ok(true);
-        }
+    pub fn handle_key_event(&mut self, event: KeyEvent) -> io::Result<()> {
+        match (event.code, event.modifiers) {
+            // Keyboard shortcuts
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.quit = true,
+            (KeyCode::Char('l'), KeyModifiers::CONTROL) => {
+                queue!(stdout(), Clear(ClearType::All), MoveTo(0, 0))?;
+                self.cur_input_row = 0;
+            }
 
-        match event.code {
-            KeyCode::Char(ch) => {
+            // Input
+            (KeyCode::Char(ch), _) => {
+                if size()?.1 - 1 == position()?.1 {
+                    queue!(stdout(), Print("\n"), MoveUp(1))?;
+                    self.cur_input_row -= 1;
+                }
+
                 self.buffer.insert(self.cursor_pos.into(), ch);
                 self.increment_cursor_pos(1);
             }
-            KeyCode::Backspace => {
+            (KeyCode::Backspace, _) => {
                 if !self.buffer.is_empty() && self.cursor_pos != 0 {
                     self.buffer.remove(self.cursor_pos as usize - 1);
                     self.decrement_cursor_pos(1);
@@ -86,13 +105,28 @@ impl Repl {
             }
 
             // Process the contents of the buffer and clear when enter is hit
-            KeyCode::Enter => {
+            (KeyCode::Enter, _) => {
+                let output = self.process_buffer();
+
                 // Check if we're on the last line, extend by two
-                if size()?.1 - 1 == position()?.1 {
-                    queue!(stdout(), Print("\n\n"), MoveUp(2))?;
+                if size()?.1 - 2 >= position()?.1 {
+                    // This is horrible code, please forgive me until I figure something out
+                    let clear_height =
+                        self.get_output_rows(&output.clone().unwrap_or_else(|x| x))? + 1;
+
+                    queue!(
+                        stdout(),
+                        Print("\n".repeat(clear_height.into())),
+                        MoveUp(clear_height)
+                    )?;
                 }
 
-                match self.process_buffer() {
+                if self.buffer.trim().is_empty() {
+                    queue!(stdout(), MoveToNextLine(1))?;
+                    return Ok(());
+                }
+
+                match output {
                     Ok(output) => queue!(
                         stdout(),
                         MoveToNextLine(1),
@@ -110,32 +144,37 @@ impl Repl {
 
                 self.buffer.clear();
                 self.cursor_pos = 0;
+                self.set_cur_input_row()?;
             }
 
             // Handle arrow keys
-            KeyCode::Left => self.decrement_cursor_pos(1),
-            KeyCode::Right => self.increment_cursor_pos(1),
-            _ => return Ok(false),
+            (KeyCode::Left, _) => self.decrement_cursor_pos(1),
+            (KeyCode::Right, _) => self.increment_cursor_pos(1),
+            _ => {}
         }
 
         self.update_text()?;
-        Ok(false)
+        Ok(())
     }
 
     fn update_text(&mut self) -> io::Result<()> {
+        let (cols, _) = size()?;
         queue!(
             stdout(),
+            MoveToRow(self.cur_input_row),
             Clear(ClearType::CurrentLine),
+            Clear(ClearType::FromCursorDown),
             MoveToColumn(0),
             PrintStyledContent("> ".bold().blue()),
             Print(&self.buffer),
-            MoveToColumn(2 + self.cursor_pos)
+            MoveToColumn((2 + self.cursor_pos) % cols),
+            MoveToRow(self.cur_input_row + (2 + self.cursor_pos) / cols),
         )?;
         Ok(())
     }
 
     fn process_buffer(&self) -> Result<String, String> {
-        match &*self.buffer {
+        match self.buffer.trim() {
             "error" => Err("This is a big bad error!".into()),
             _ => Ok(self.buffer.clone()),
         }
