@@ -1,6 +1,6 @@
 [package]
 name = "glide"
-version = "0.1.0"
+version = "1.0.0"
 repository = "https://github.com/ngpal/glide.git"
 edition = "2021"
 
