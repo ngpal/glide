@@ -1,22 +1,13 @@
-#![allow(unused)]
-
 use get_if_addrs::{get_if_addrs, IfAddr};
 use log::{error, info, warn};
 use regex::Regex;
 use std::collections::HashMap;
-use std::fmt::Error;
-use std::fs::{self, remove_dir_all};
-use std::os::unix::fs::MetadataExt;
-use std::path::Path;
+use std::fs::{self};
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
-use utils::{
-    commands::Command,
-    data::{Request, UserData},
-    protocol::Transmission,
-};
+use utils::{commands::Command, data::UserData, protocol::Transmission};
 
 const CHUNK_SIZE: usize = 1024;
 
@@ -53,7 +44,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind("0.0.0.0:8000").await?;
     info!("Server is running on 0.0.0.0:8000 (listening on all interfaces)");
     let state: SharedState = Arc::new(Mutex::new(HashMap::new()));
-    fs::create_dir("./clients");
+    fs::create_dir("./clients")?;
+
     let cleaner = Cleanup;
 
     loop {
@@ -74,18 +66,16 @@ async fn handle_client(
     stream: &mut TcpStream,
     state: SharedState,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut buffer = vec![0; CHUNK_SIZE];
     let mut username = String::new();
 
     // Loop until a valid username is provided
     loop {
         let input = Transmission::from_stream(stream).await?;
-        if let Transmission::Username(uname) = input {
-            username = uname;
+        username = if let Transmission::Username(uname) = input {
+            uname
         } else {
             continue;
-        }
-
+        };
         // Check if the username is valid and available
         let response = {
             let clients = state.lock().await;
@@ -177,7 +167,7 @@ async fn remove_client(username: &str, state: &SharedState) {
     }
 
     // Remove folder under user
-    fs::remove_dir_all(username);
+    fs::remove_dir_all(username).unwrap();
 
     info!("Client @{} disconnected", username);
 }
