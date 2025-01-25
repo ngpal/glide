@@ -9,7 +9,6 @@ cd glide
 ### Setting up the server
 To set up the server all you have to do is
 ```bash
-cd glide-server
 cargo run --release
 ```
 Or if you want information about who is connecting from where run with
@@ -17,9 +16,10 @@ Or if you want information about who is connecting from where run with
 RUST_LOG=info cargo run --release
 ```
 ### Connecting your client
-To connect your client to the server, first locate to the `glide/glide-client` directory and run the following command with `<IP>` and `<PORT>` as the same ones given when running the server
+To connect your client to the server, first clone the cli client repository and run the following command with `<IP>` and `<PORT>` as the same ones given when running the server
 ```bash
-# In glide/glide-client
+git clone https://www.github.com/ngpal/glide-cli.git
+cd glide-cli
 cargo run --release -- <IP> <PORT>
 ```
 ## Commands

@@ -9,4 +9,4 @@ get_if_addrs = "0.5.3"
 log = "0.4.25"
 regex = "1.11.1"
 tokio = { version = "1.42.0", features = ["full"] }
-utils = { path = "../utils" }
+utils = { git = "https://github.com/ngpal/glide-utils-rs.git" }
