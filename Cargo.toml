@@ -1,6 +1,7 @@
 [package]
-name = "glide-server"
+name = "glide"
 version = "0.1.0"
+repository = "https://github.com/ngpal/glide.git"
 edition = "2021"
 
 [dependencies]
@@ -10,3 +11,8 @@ log = "0.4.25"
 regex = "1.11.1"
 tokio = { version = "1.42.0", features = ["full"] }
 utils = { git = "https://github.com/ngpal/glide-utils-rs.git" }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
