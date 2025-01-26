@@ -138,10 +138,13 @@ async fn handle_client(
     loop {
         let command;
 
-        match Transmission::from_stream(stream).await? {
-            Transmission::Command(cmd) => command = cmd,
-            Transmission::ClientDisconnected => {
-                remove_client(&username, &state).await;
+        match Transmission::from_stream(stream).await {
+            Ok(Transmission::Command(cmd)) => command = cmd,
+            Ok(Transmission::ClientDisconnected) => {
+                break;
+            }
+            Err(e) => {
+                error!("{}", e);
                 break;
             }
             something_else => {
@@ -159,6 +162,7 @@ async fn handle_client(
         }
     }
 
+    remove_client(&username, &state).await;
     Ok(())
 }
 
