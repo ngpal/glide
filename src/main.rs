@@ -4,7 +4,7 @@ use get_if_addrs::{get_if_addrs, IfAddr};
 use log::{debug, error, info, warn};
 use regex::Regex;
 use std::collections::HashMap;
-use std::fs::{self, remove_dir};
+use std::fs::{self};
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -126,13 +126,7 @@ async fn handle_client(
         };
 
         // Send the response to the client
-        match stream.write_all(response.to_bytes().as_slice()).await {
-            Err(e) => {
-                error!("{}", e);
-                remove_client(&username, &state).await;
-            }
-            _ => {}
-        };
+        stream.write_all(response.to_bytes().as_slice()).await?;
 
         if matches!(response, Transmission::UsernameOk) {
             info!("Client @{} connected\r", username);
@@ -144,14 +138,9 @@ async fn handle_client(
     loop {
         let command;
 
-        match Transmission::from_stream(stream).await {
-            Ok(Transmission::Command(cmd)) => command = cmd,
-            Ok(Transmission::ClientDisconnected) => {
-                remove_client(&username, &state).await;
-                break;
-            }
-            Err(e) => {
-                error!("{}", e);
+        match Transmission::from_stream(stream).await? {
+            Transmission::Command(cmd) => command = cmd,
+            Transmission::ClientDisconnected => {
                 remove_client(&username, &state).await;
                 break;
             }
@@ -166,7 +155,6 @@ async fn handle_client(
 
         if let Err(e) = Command::handle(command, &username, stream, &state).await {
             error!("Error handling command for @{}: {}\r", username, e);
-            remove_client(&username, &state).await;
             break;
         }
     }
@@ -191,7 +179,6 @@ async fn add_client(
 }
 
 async fn remove_client(username: &str, state: &SharedState) {
-    info!("Removing client {}", username);
     let mut clients = state.lock().await;
 
     // Remove the client
