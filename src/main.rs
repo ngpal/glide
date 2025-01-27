@@ -22,7 +22,7 @@ impl Drop for Cleanup {
     fn drop(&mut self) {
         warn!("Exiting server\r");
         info!("Clearing clients folder\r");
-        fs::remove_dir_all("./clients").unwrap_or_else(|_| warn!("Clients folder not found"));
+        fs::remove_dir_all("./clients").unwrap_or_else(|_| warn!("Clients folder not found\r"));
         disable_raw_mode().unwrap();
     }
 }
@@ -144,7 +144,7 @@ async fn handle_client(
                 break;
             }
             Err(e) => {
-                error!("{}", e);
+                error!("{}\r", e);
                 break;
             }
             something_else => {
