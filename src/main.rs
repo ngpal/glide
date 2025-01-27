@@ -20,7 +20,7 @@ type SharedState = Arc<Mutex<HashMap<String, UserData>>>;
 struct Cleanup;
 impl Drop for Cleanup {
     fn drop(&mut self) {
-        warn!("Exiting server\r");
+        warn!("Shutting down\r");
         info!("Clearing clients folder\r");
         fs::remove_dir_all("./clients").unwrap_or_else(|_| warn!("Clients folder not found\r"));
         disable_raw_mode().unwrap();
@@ -129,7 +129,7 @@ async fn handle_client(
         stream.write_all(response.to_bytes().as_slice()).await?;
 
         if matches!(response, Transmission::UsernameOk) {
-            info!("Client @{} connected\r", username);
+            info!("@{}: Client connected\r", username);
             break username;
         }
     };
@@ -144,20 +144,20 @@ async fn handle_client(
                 break;
             }
             Err(e) => {
-                error!("{}\r", e);
+                error!("@{}: {}\r", &username, e);
                 break;
             }
             something_else => {
                 warn!(
-                    "Didn't recieve command when I should have\n{:#?}\r",
-                    something_else
+                    "@{}: Didn't recieve command when I should have\n{:#?}\r",
+                    &username, something_else
                 );
                 continue;
             }
         }
 
         if let Err(e) = Command::handle(command, &username, stream, &state).await {
-            error!("Error handling command for @{}: {}\r", username, e);
+            error!("@{}: Error handling command: {}\r", username, e);
             break;
         }
     }
@@ -206,9 +206,10 @@ async fn remove_client(username: &str, state: &SharedState) {
     }
 
     // Remove folder under user
-    fs::remove_dir_all(username).unwrap_or_else(|_| warn!("No @{} folder to delete\r", username));
+    fs::remove_dir_all(username)
+        .unwrap_or_else(|_| warn!("@{}: No user folder to delete\r", username));
 
-    info!("Client @{} disconnected\r", username);
+    info!("@{}: Client disconnected\r", username);
 }
 
 fn validate_username(username: &str) -> bool {
